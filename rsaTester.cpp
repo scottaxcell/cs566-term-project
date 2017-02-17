@@ -12,18 +12,33 @@
 #include <openssl/rand.h>
 
 std::vector<char> readFileBytes(const std::string& filename)
-{  
-    std::ifstream ifs(filename.c_str(), std::ios::binary|std::ios::ate);
-    std::ifstream::pos_type pos = ifs.tellg();
+{
+  std::ifstream ifs(filename.c_str(), std::ios::binary|std::ios::ate);
+  std::ifstream::pos_type pos = ifs.tellg();
 
-    std::vector<char> result(pos);
+  std::vector<char> result(pos);
 
-    ifs.seekg(0, std::ios::beg);
-    ifs.read(&result[0], pos);
+  ifs.seekg(0, std::ios::beg);
+  ifs.read(&result[0], pos);
 
-    return result;
+  return result;
 }
 
+RSA* getPrivateKey(std::vector<char>& byteArray)
+{
+  const char* str = byteArray.data();
+  BIO* bio = BIO_new_mem_buf((void*)str, -1);
+  BIO_set_flags(bio, BIO_FLAGS_BASE64_NO_NL);
+
+  RSA* rsa = PEM_read_bio_RSAPrivateKey(bio,nullptr, nullptr, nullptr);
+  if (!rsa) {
+    std::cerr << "Could not load private key" << std::endl;
+    return nullptr;
+  }
+
+  BIO_free(bio);
+  return rsa;
+}
 
 RSA* getPublicKey(std::vector<char>& byteArray)
 {
@@ -31,9 +46,8 @@ RSA* getPublicKey(std::vector<char>& byteArray)
   BIO* bio = BIO_new_mem_buf((void*)str, -1);
   BIO_set_flags(bio, BIO_FLAGS_BASE64_NO_NL);
 
-  RSA* rsa = PEM_read_bio_RSA_PUBKEY(bio,NULL, NULL, NULL);
-  if(!rsa)
-  {
+  RSA* rsa = PEM_read_bio_RSA_PUBKEY(bio,nullptr, nullptr, nullptr);
+  if (!rsa) {
     std::cerr << "Could not load public key" << std::endl;
     return nullptr;
   }
@@ -69,6 +83,9 @@ int main(int argc, char* argv[]) {
 
   std::cout << "Public key: " << pubKeyContents.data() << std::endl;
   std::cout << "Private key: " << privKeyContents.data() << std::endl;
+
+  RSA* pubRSA = getPublicKey(pubKeyContents);
+  RSA* privRSA = getPrivateKey(privKeyContents);
 
 	return 0;
 }
