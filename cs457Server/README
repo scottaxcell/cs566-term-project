@@ -1,0 +1,58 @@
+*********************
+*Simple Chat Program*
+*********************
+
+How to compile the source:
+==========================
+Run make in the same directory as the chat.c and makefile.
+You can also compile and link manually using the following;
+$ gcc -D_POSIX_SOURCE -std=c99 -o chat chat.c
+
+
+Usage:
+======
+$	./chat [-s <ip address> -p <port>]
+
+
+How to run as the server:
+=========================
+$ ./chat
+
+Example output:
+Waiting for a connection on 129.82.45.248 port 61723
+
+
+How to run as the client:
+=========================
+$ ./chat -p 61723 -s 129.82.45.248
+
+Example output:
+Connecting to server... Connected!
+Connected to a friend! You send first.
+You:
+
+
+Questions I asked the TA (Awad)
+===============================
+I asked Awad about the process of creating the correct packet structure.
+Below is copied from an email thread we had. I ended up not doing what 
+I proposed because there was a much simpler way of accomplishing the
+prepending of the version and string size to the packet, you can
+this in my source code.
+
+Scott:
+I plan on doing the following, can you confirm if the following pseudo code for creating the packet is the right idea?
+
+uint16_t version = 457;
+char versionlo = version & 0xFF;
+char versionhi = version >> 8;
+
+unit16_t msgSize = sizeof(msg);
+char msgSizeLo = msgSize & 0xFF;
+char msgSizeHi = msgSize >> 8;
+
+Then create the packet by concatenating the newly created chars and msg into a char array. Send the char array packet and on the other end reverse the process.
+
+Awad:
+it looks great to me.
+good luck.

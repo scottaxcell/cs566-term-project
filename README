@@ -1,0 +1,3 @@
+Generate public and private RSA keys:
+openssl genrsa -out priv.pem 2048
+openssl rsa -in priv.pem -pubout > pub.pem
