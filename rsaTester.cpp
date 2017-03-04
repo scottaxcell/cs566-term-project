@@ -1,6 +1,7 @@
 #include <iostream>
 #include <fstream>
 #include <vector>
+#include <string.h>
 
 #include <openssl/rsa.h>
 #include <openssl/engine.h>
@@ -154,36 +155,52 @@ int main(int argc, char* argv[]) {
   std::string pubFilename(argv[1]);
   std::string privFilename(argv[2]);
  	
-  std::cout << "Public filename: " << pubFilename << std::endl;
-  std::cout << "Private filename: " << privFilename << std::endl;
+  //std::cout << "Public filename: " << pubFilename << std::endl;
+  //std::cout << "Private filename: " << privFilename << std::endl;
 
   std::vector<char> pubKeyContents = readFileBytes(pubFilename.c_str());
   std::vector<char> privKeyContents = readFileBytes(privFilename.c_str());
 
-  std::cout << "Public key: " << pubKeyContents.data() << std::endl;
-  std::cout << "Private key: " << privKeyContents.data() << std::endl;
+  //std::cout << "Public key: " << pubKeyContents.data() << std::endl;
+  //std::cout << "Private key: " << privKeyContents.data() << std::endl;
 
   RSA* pubRSA = getPublicKey(pubKeyContents);
   RSA* privRSA = getPrivateKey(privKeyContents);
 
   // TEST const char* to vector<char>
   //const char* input = "it was made of stars!\0";
-  const char* input = "if i were YOU, then I would n0t be me... 123456789 -- #sorrynotsorry\0";
-  std::string inputStr(input);
-  //std::vector<char> inputVec(reinterpret_cast<std::vector<char>::size_type>(inputStr.c_str()), inputStr.size());
-  std::vector<char> inputVec(inputStr.begin(), inputStr.end());
-  //std::vector<char>::size_type inputSize = strlen((const char*)input);
-  //std::vector<char> inputVec(input, input + inputSize);
-  std::cout << "Input: " << inputVec.data() << std::endl;
-  std::vector<char> encryptedStr = encryptDataWithPublicKey(pubRSA, inputVec);
-  std::cout << "Encrypted Input: " << encryptedStr.data() << std::endl;
+  //const char* input = "if i were YOU, then I would n0t be me... 123456789 -- #sorrynotsorry\0";
+  //std::string inputStr(input);
+  ////std::vector<char> inputVec(reinterpret_cast<std::vector<char>::size_type>(inputStr.c_str()), inputStr.size());
+  //std::vector<char> inputVec(inputStr.begin(), inputStr.end());
+  ////std::vector<char>::size_type inputSize = strlen((const char*)input);
+  ////std::vector<char> inputVec(input, input + inputSize);
+  //std::cout << "Input: " << inputVec.data() << std::endl;
+  //std::vector<char> encryptedStr = encryptDataWithPublicKey(pubRSA, inputVec);
+  //std::cout << "Encrypted Input: " << encryptedStr.data() << std::endl;
+  //std::vector<char> decryptedStr = decryptDataWithPrivateKey(privRSA, encryptedStr);
+  //std::cout << "Decrypted Input: " << decryptedStr.data() << std::endl;
+  //if (inputVec == decryptedStr) {
+  //  std::cout << "ENCRYPTION/DECRYPTION SUCCESSFUL" << std::endl;
+  //} else {
+  //  std::cout << "ENCRYPTION/DECRYPTION FAILED" << std::endl;
+  //}
+
+  uint32_t msgsize = 1337;
+  std::cout << "original int " << msgsize << std::endl;
+  std::vector<char> packetVec(sizeof(msgsize));
+  memcpy(&packetVec[0], &msgsize, sizeof(msgsize));
+  //packetVec.push_back(reinterpret_cast<char>(msgsize));
+  
+  //std::cout << "Input: " << packetVec.data() << std::endl;
+  std::vector<char> encryptedStr = encryptDataWithPublicKey(pubRSA, packetVec);
+  //std::cout << "Encrypted Input: " << encryptedStr.data() << std::endl;
   std::vector<char> decryptedStr = decryptDataWithPrivateKey(privRSA, encryptedStr);
-  std::cout << "Decrypted Input: " << decryptedStr.data() << std::endl;
-  if (inputVec == decryptedStr) {
-    std::cout << "ENCRYPTION/DECRYPTION SUCCESSFUL" << std::endl;
-  } else {
-    std::cout << "ENCRYPTION/DECRYPTION FAILED" << std::endl;
-  }
+  //std::cout << "Decrypted Input: " << decryptedStr.data() << std::endl;
+  
+  uint32_t newsize;
+  memcpy(&newsize, &decryptedStr[0], sizeof(newsize));
+  std::cout << "decrypted int " << newsize << std::endl;
 
 	return 0;
 }

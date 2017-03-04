@@ -214,7 +214,7 @@ void printPrimaryIp()
 /**
 * Server example
 */
-void server() {
+void server(RSA *pubRSA, RSA* privRSA) {
 	int sockfd, newfd; // listen on sockfd, new connection on newfd
 	struct addrinfo hints, *res;
 	struct sockaddr_storage their_addr;
@@ -358,7 +358,7 @@ void *get_in_addr(struct sockaddr *sa)
 /**
 * Client example
 */
-void client(char *ip_addr, char *port) {
+void client(char *ip_addr, char *port, RSA *pubRSA, RSA *privRSA) {
 	std:: cout << "Connecting to server... " << std::endl;
 
 	int sockfd;
@@ -398,6 +398,14 @@ void client(char *ip_addr, char *port) {
   
   std::cout << "DEBUG client input size " << msgsize << std::endl;
   std::cout << "DEBUG client input '" << userInput << "'" << std::endl;
+
+  // Encrypt user input
+  //std::copy(userInput.begin(), userInput.end(), std::back_inserter(packetVec));
+  //std::vector<char> inputData(userInput.begin(), userInput.end());
+  //std::vector<char> encryptedStr = encryptDataWithPublicKey(pubRSA, inputData);
+  //std::cout << "Encrypted Input: " << encryptedStr.data() << std::endl;
+  //std::vector<char> decryptedStr = decryptDataWithPrivateKey(privRSA, encryptedStr);
+  //std::cout << "Decrypted Input: " << decryptedStr.data() << std::endl;
 
   // packet format: msgsize, msg
   uint32_t packetsize = (sizeof(net_msgsize) + msgsize);
@@ -502,7 +510,7 @@ void client(char *ip_addr, char *port) {
 */
 int main(int argc, char* argv[]) {
   // XXX
-  // - add ability to send/receive variable data sizes
+  // - DONE add ability to send/receive variable data sizes
   // - add network serialization/deserialization on data
   // - add ability to take public RSA file as input
   // - add abilitiy to take private RSA file as input
@@ -512,14 +520,29 @@ int main(int argc, char* argv[]) {
   
   std::cout << "Chat Server Tester" << std::endl;
 
-  if (argc == 1) {
-    server();
-  } else if (argc == 3) {
-		char *ip_addr = argv[1];
-		char *port = argv[2];
-    client(ip_addr, port);
+  if (argc == 3) {
+    std::string pubFilename(argv[1]);
+    std::string privFilename(argv[2]);
+    std::vector<char> pubKeyContents = readFileBytes(pubFilename.c_str());
+    std::vector<char> privKeyContents = readFileBytes(privFilename.c_str());
+    RSA* pubRSA = getPublicKey(pubKeyContents);
+    RSA* privRSA = getPrivateKey(privKeyContents);
+
+
+    server(pubRSA, privRSA);
+  } else if (argc == 5) {
+    std::string pubFilename(argv[1]);
+    std::string privFilename(argv[2]);
+    std::vector<char> pubKeyContents = readFileBytes(pubFilename.c_str());
+    std::vector<char> privKeyContents = readFileBytes(privFilename.c_str());
+    RSA* pubRSA = getPublicKey(pubKeyContents);
+    RSA* privRSA = getPrivateKey(privKeyContents);
+		char *ip_addr = argv[3];
+		char *port = argv[4];
+
+    client(ip_addr, port, pubRSA, privRSA);
   } else {
-    std::cout << "USAGE: ./chatTester [<ip address> <port>]" << std::endl;
+    std::cout << "USAGE: ./chatTester <pub file> <priv file> [<ip address> <port>]" << std::endl;
     return 1;
   }
 
@@ -528,14 +551,6 @@ int main(int argc, char* argv[]) {
   //  return 1;
   //}
 
-  //std::string pubFilename(argv[1]);
-  //std::string privFilename(argv[2]);
- 	//
-  //std::cout << "Public filename: " << pubFilename << std::endl;
-  //std::cout << "Private filename: " << privFilename << std::endl;
-
-  //std::vector<char> pubKeyContents = readFileBytes(pubFilename.c_str());
-  //std::vector<char> privKeyContents = readFileBytes(privFilename.c_str());
 
   //std::cout << "Public key: " << pubKeyContents.data() << std::endl;
   //std::cout << "Private key: " << privKeyContents.data() << std::endl;
