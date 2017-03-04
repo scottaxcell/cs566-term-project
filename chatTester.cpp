@@ -40,6 +40,32 @@
 /**
 *
 */
+int sendall(int s, unsigned char *buf, uint32_t *len)
+{
+  int total = 0;        // how many bytes we've sent
+  int bytesleft = *len; // how many we have left to send
+  int n;
+
+  while(total < *len) {
+    n = send(s, buf+total, bytesleft, 0);
+    if (n == -1) { break; }
+    total += n;
+    bytesleft -= n;
+  }
+
+  *len = total; // return number actually sent here
+
+  return n==-1?-1:0; // return -1 on failure, 0 on success
+}
+
+// ============================================================================
+/**
+*
+*/
+// ============================================================================
+/**
+*
+*/
 std::vector<char> readFileBytes(const std::string& filename)
 {
   std::ifstream ifs(filename.c_str(), std::ios::binary|std::ios::ate);
@@ -238,54 +264,79 @@ void server() {
 
 	std::cout << "Found a friend! You receive first." << std::endl;
 
-  char buffer[MAXDATASIZE];
   while (1) {
-		memset(&buffer[0], 0, sizeof(buffer));
+    uint32_t net_msgsize;
+    unsigned char buffer[sizeof(net_msgsize)];
+    memset(&buffer[0], 0, sizeof(buffer));
     int recv_bytes = recv(newfd, buffer, sizeof(buffer), 0);
     if (recv_bytes == 0) {
-      std::cout << "Chat session closed." << std::endl;
-      exit(0);
+      printf("Connection closed.\n");
+      exit(1);
     } else if (recv_bytes == -1) {
-      std::cerr << "ERROR: server recv failed" << std::endl;
+      printf("ERROR: server recv failed\n");
       exit(1);
     } else {
-			uint16_t recv_version = ntohs(buffer[0] | buffer[1] << 8);
-			uint16_t recv_size = ntohs(buffer[2] | buffer[3] << 8);
+      // read received msgsize
+      memcpy(&net_msgsize, buffer, sizeof(net_msgsize));
+      uint32_t msgsize = ntohl(net_msgsize);
+      std::cout << "DEBUG: server incoming packet is " << msgsize << " bytes." << std::endl;
+
+      // receive rest of the packet
+      int totalReceived = 0, received = 0;
+      unsigned char *recv_packet = (unsigned char*)malloc(msgsize+1);
+      while (totalReceived < msgsize) {
+        received = recv(newfd, (recv_packet+totalReceived), msgsize, 0);
+        totalReceived += received;
+        if (received == 0) {
+          printf("Connection closed.\n");
+          exit(1);
+        } else if (received == -1) {
+          printf("ERROR: server recv failed\n");
+          fprintf(stderr, "server: %s\n", gai_strerror(received));
+          exit(1);
+        }
+      }
+      std::cout << "DEBUG: server received " << totalReceived << " bytes." << std::endl;
 
       std::cout << "Friend: ";
-			for (int i = 4; i <= (recv_size+4); i++) {
-				//printf("%c", buffer[i]);
-				std::cout << buffer[i];
+			for (int i = 0; i <= msgsize; i++) {
+				printf("%c", recv_packet[i]);
 			}
+      free(recv_packet);
+
       std::cout << std::endl << "You: ";
+      
+      std::string userInput;
+      std::getline(std::cin, userInput); // stops reading at newline
 
-      // TODO remove this size limit enforcing
-      char msg[140];
-			memset(&msg[0], 0, sizeof(msg));
-			fgets(msg, 200, stdin);
-			while (strlen(msg) > 140) {
-        std::cerr << "Error: Input too long.\nYou: ";
-			  memset(&msg[0], 0, sizeof(msg));
-			  fgets(msg, 200, stdin);
-			}
-			size_t ln = strlen(msg) - 1;
-			if (msg[ln] == '\n') {
-			  msg[ln] = '\0';
-			}
+	    msgsize = userInput.size();
+	    net_msgsize = htonl(msgsize);
+      
+      std::cout << "DEBUG server input size " << msgsize << std::endl;
+      std::cout << "DEBUG server input '" << userInput << "'" << std::endl;
 
-			uint16_t version = htons(457);
-			uint16_t msgsize = htons(strlen(msg));
-			
-			char packet[144];
-			memset(&packet[0], 0, sizeof(packet));
-		  memcpy ( &packet[0], &version, sizeof(version) );
-		  memcpy ( &packet[2], &msgsize, sizeof(msgsize) );
-		  strncpy ( &packet[4], msg, strlen(msg) );
+      // packet format: msgsize, msg
+      uint32_t packetsize = (sizeof(net_msgsize) + msgsize);
+	    char packet[packetsize];
+	    memset(&packet[0], 0, sizeof(packet)); // zero out packet contents
+      memcpy(&packet[0], &net_msgsize, sizeof(net_msgsize)); // copy net message size into buffer
+      strncpy(&packet[sizeof(msgsize)], userInput.c_str(), msgsize); // copy message into buffer
 
-      int bytes_sent = -1, len = strlen(msg)+4;
-      while (bytes_sent != len) {
-        bytes_sent = send(newfd, &packet, len, 0);
+      std::cout << "DEBUG: server wants to send " << packetsize << " bytes." << std::endl;
+      std::cout << "DEBUG: server packet to send: ";
+	    for (int i = sizeof(net_msgsize); i < packetsize; i++) {
+	    	printf("%c", packet[i]);
+	    }
+      std::cout << std::endl;
+
+
+      int32_t rc = sendall(newfd, (unsigned char*)packet, &packetsize);
+      if (rc != 0) {
+        std::cerr << "ERROR: failed to send data" << std::endl;
+        exit(1);
       }
+      std::cout << "DEBUG: server sent " << packetsize << " bytes." << std::endl;
+
     }
   }
 }
@@ -308,10 +359,10 @@ void *get_in_addr(struct sockaddr *sa)
 * Client example
 */
 void client(char *ip_addr, char *port) {
-	printf("Connecting to server... ");
+	std:: cout << "Connecting to server... " << std::endl;
 
-	int sockfd, numbytes;
-	struct addrinfo hints, *servinfo, *p;
+	int sockfd;
+	struct addrinfo hints, *servinfo;
 	int rv;
 	char server_ip[INET_ADDRSTRLEN];
 
@@ -320,98 +371,127 @@ void client(char *ip_addr, char *port) {
 	hints.ai_socktype = SOCK_STREAM;
 
 	if ((rv = getaddrinfo(ip_addr, port, &hints, &servinfo)) != 0) {
-		printf("ERROR: getaddrinfo failed\n");
+		std::cerr << "ERROR: getaddrinfo failed" << std::endl;
 		exit(1);
 	}
 
 	if ((sockfd = socket(servinfo->ai_family, servinfo->ai_socktype, servinfo->ai_protocol)) < 0) {
-		printf("ERROR: client socket failed\n");
+		std::cerr << "ERROR: client socket failed" << std::endl;
 		exit(1);
 	}
 
 	if (connect(sockfd, servinfo->ai_addr, servinfo->ai_addrlen) < 0) {
-		printf("ERROR: client connect failed\n");
+		std::cerr << "ERROR: client connect failed" << std::endl;
 		exit(1);
 	}
 
 	inet_ntop(servinfo->ai_family, get_in_addr((struct sockaddr *)servinfo->ai_addr), server_ip, sizeof(server_ip));
-	printf("Connected!\n");
-	printf("Connected to a friend! You send first.\n");
+	std::cout << "Connected!" << std::endl;
+	std::cout << "Connected to a friend! You send first." << std::endl;
 
-  printf("You: ");
-  char msg[140];
-	memset(&msg[0], 0, sizeof(msg));
-	fgets(msg, 200, stdin);
-	while (strlen(msg) > 140) {
-    printf("Error: Input too long.\nYou: ");
-	  memset(&msg[0], 0, sizeof(msg));
-	  fgets(msg, 200, stdin);
+  std::cout << "You: ";
+  std::string userInput;
+  std::getline(std::cin, userInput); // stops reading at newline
+
+	uint32_t msgsize = userInput.size();
+	uint32_t net_msgsize = htonl(msgsize);
+  
+  std::cout << "DEBUG client input size " << msgsize << std::endl;
+  std::cout << "DEBUG client input '" << userInput << "'" << std::endl;
+
+  // packet format: msgsize, msg
+  uint32_t packetsize = (sizeof(net_msgsize) + msgsize);
+	char packet[packetsize];
+	memset(&packet[0], 0, sizeof(packet)); // zero out packet contents
+  memcpy(&packet[0], &net_msgsize, sizeof(net_msgsize)); // copy net message size into buffer
+  strncpy(&packet[sizeof(msgsize)], userInput.c_str(), msgsize); // copy message into buffer
+
+  std::cout << "DEBUG: client wants to send " << packetsize << " bytes." << std::endl;
+  std::cout << "DEBUG: client packet to send: ";
+	for (int i = sizeof(net_msgsize); i < packetsize; i++) {
+		printf("%c", packet[i]);
 	}
-	size_t ln = strlen(msg) - 1;
-	if (msg[ln] == '\n') {
-	  msg[ln] = '\0';
-	}
+  std::cout << std::endl;
 
-	uint16_t version = htons(457);
-	uint16_t msgsize = htons(strlen(msg));
-
-	char packet[144];
-	memset(&packet[0], 0, sizeof(packet));
-  memcpy ( &packet[0], &version, sizeof(version) );
-  memcpy ( &packet[2], &msgsize, sizeof(msgsize) );
-  strncpy ( &packet[4], msg, strlen(msg) );
-
-  int bytes_sent = -1, len = strlen(msg)+4;
-  while (bytes_sent != len) {
-    bytes_sent = send(sockfd, &packet, len, 0);
+  int32_t rc = sendall(sockfd, (unsigned char*)packet, &packetsize);
+  if (rc != 0) {
+    std::cerr << "ERROR: failed to send data" << std::endl;
+    exit(1);
   }
+  std::cout << "DEBUG: client sent " << packetsize << " bytes." << std::endl;
 
-  char buffer[MAXDATASIZE];
   while (1) {
-		memset(&buffer[0], 0, sizeof(buffer));
+    unsigned char buffer[sizeof(net_msgsize)];
+    memset(&buffer[0], 0, sizeof(buffer));
     int recv_bytes = recv(sockfd, buffer, sizeof(buffer), 0);
     if (recv_bytes == 0) {
-      printf("Chat session closed.\n");
-      exit(0);
+      printf("Connection closed.\n");
+      exit(1);
     } else if (recv_bytes == -1) {
-      printf("ERROR: server recv failed\n");
+      printf("ERROR: client recv failed\n");
       exit(1);
     } else {
-			uint16_t recv_version = ntohs(buffer[0] | buffer[1] << 8);
-			uint16_t recv_size = ntohs(buffer[2] | buffer[3] << 8);
+      // read received msgsize
+      memcpy(&net_msgsize, buffer, sizeof(net_msgsize));
+      msgsize = ntohl(net_msgsize);
+      std::cout << "DEBUG: client incoming packet is " << msgsize << " bytes." << std::endl;
 
-      printf("Friend: ");
-			for (int i = 4; i <= (recv_size+4); i++) {
-				printf("%c", buffer[i]);
-			}
-      printf("\nYou: ");
-
-      char msg[140];
-			memset(&msg[0], 0, sizeof(msg));
-			fgets(msg, 200, stdin);
-			while (strlen(msg) > 140) {
-        printf("Error: Input too long.\nYou: ");
-			  memset(&msg[0], 0, sizeof(msg));
-			  fgets(msg, 200, stdin);
-			}
-			size_t ln = strlen(msg) - 1;
-			if (msg[ln] == '\n') {
-			  msg[ln] = '\0';
-			}
-
-			uint16_t version = htons(457);
-			uint16_t msgsize = htons(strlen(msg));
-			
-			char packet[144];
-			memset(&packet[0], 0, sizeof(packet));
-		  memcpy ( &packet[0], &version, sizeof(version) );
-		  memcpy ( &packet[2], &msgsize, sizeof(msgsize) );
-		  strncpy ( &packet[4], msg, strlen(msg) );
-
-      int bytes_sent = -1, len = strlen(msg)+4;
-      while (bytes_sent != len) {
-        bytes_sent = send(sockfd, &packet, len, 0);
+      // receive rest of the packet
+      int totalReceived = 0, received = 0;
+      unsigned char *recv_packet = (unsigned char*)malloc(msgsize+1);
+      while (totalReceived < msgsize) {
+        received = recv(sockfd, (recv_packet+totalReceived), msgsize, 0);
+        totalReceived += received;
+        if (received == 0) {
+          printf("Connection closed.\n");
+          exit(1);
+        } else if (received == -1) {
+          printf("ERROR: client recv failed\n");
+          fprintf(stderr, "client: %s\n", gai_strerror(received));
+          exit(1);
+        }
       }
+      std::cout << "DEBUG: client received " << totalReceived << " bytes." << std::endl;
+
+      std::cout << "Friend: ";
+			for (int i = 0; i <= msgsize; i++) {
+				printf("%c", recv_packet[i]);
+			}
+      free(recv_packet);
+
+      std::cout << std::endl << "You: ";
+      
+      std::string userInput;
+      std::getline(std::cin, userInput); // stops reading at newline
+
+	    uint32_t msgsize = userInput.size();
+	    uint32_t net_msgsize = htonl(msgsize);
+      
+      std::cout << "DEBUG client input size " << msgsize << std::endl;
+      std::cout << "DEBUG client input '" << userInput << "'" << std::endl;
+
+      // packet format: msgsize, msg
+      uint32_t packetsize = (sizeof(net_msgsize) + msgsize);
+	    char packet[packetsize];
+	    memset(&packet[0], 0, sizeof(packet)); // zero out packet contents
+      memcpy(&packet[0], &net_msgsize, sizeof(net_msgsize)); // copy net message size into buffer
+      strncpy(&packet[sizeof(msgsize)], userInput.c_str(), msgsize); // copy message into buffer
+
+      std::cout << "DEBUG: client wants to send " << packetsize << " bytes." << std::endl;
+      std::cout << "DEBUG: client packet to send: ";
+	    for (int i = sizeof(net_msgsize); i < packetsize; i++) {
+	    	printf("%c", packet[i]);
+	    }
+      std::cout << std::endl;
+
+
+      int32_t rc = sendall(sockfd, (unsigned char*)packet, &packetsize);
+      if (rc != 0) {
+        std::cerr << "ERROR: failed to send data" << std::endl;
+        exit(1);
+      }
+      std::cout << "DEBUG: client sent " << packetsize << " bytes." << std::endl;
+
     }
   }
 }
@@ -421,7 +501,15 @@ void client(char *ip_addr, char *port) {
 * Main
 */
 int main(int argc, char* argv[]) {
-  // XXX add ability to take port as input
+  // XXX
+  // - add ability to send/receive variable data sizes
+  // - add network serialization/deserialization on data
+  // - add ability to take public RSA file as input
+  // - add abilitiy to take private RSA file as input
+  // - add encryption of data using public RSA
+  // - add decryption of data using private RSA
+  // - add ability to take port as input
+  
   std::cout << "Chat Server Tester" << std::endl;
 
   if (argc == 1) {

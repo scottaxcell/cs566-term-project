@@ -1,0 +1,833 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <errno.h>
+#include <string.h>
+#include <inttypes.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <netdb.h>
+#include <arpa/inet.h>
+#include <time.h>
+#include <pthread.h>
+#include <sys/stat.h>
+#include "awget.h"
+
+#define MYPORT "61723"
+#define MAXDATASIZE 144 // max bytes we can get at once
+#define NUM_THREADS 5 // max threads we support
+
+// struct for passing multiple arguments to a thread
+typedef struct {
+ int thread_id;
+ int newfd;
+ awget_t awgetData;
+} thread_data_t;
+
+
+//
+// display help and exit
+//
+void help() {
+  printf("Usage: ./ss [-p port]\n");
+  exit(0);
+}
+
+//
+// verify ip and port are sound
+//
+void verifyInput(char *port) {
+  if (port == NULL) {
+    return;
+  }
+	for (int i = 0; i < strlen(port); ++i) {
+    if (port[i] >= '0' && port[i] <= '9') {
+			// OK!
+		} else {
+			printf("ERROR: port must consist of numbers, got '%s'\n", port);
+			exit(-1);
+		}
+	}
+}
+
+//
+// get the outside ip address of this host and print it
+//
+void getPrimaryIp()
+{
+  int sock = socket(AF_INET, SOCK_DGRAM, 0);
+
+  const char* kGoogleDnsIp = "8.8.8.8";
+  uint16_t kDnsPort = 53;
+  struct sockaddr_in serv;
+  memset(&serv, 0, sizeof(serv));
+  serv.sin_family = AF_INET;
+  serv.sin_addr.s_addr = inet_addr(kGoogleDnsIp);
+  serv.sin_port = htons(kDnsPort);
+
+  int err = connect(sock, (struct sockaddr*) &serv, sizeof(serv));
+
+  struct sockaddr_in name;
+  socklen_t namelen = sizeof(name);
+  err = getsockname(sock, (struct sockaddr*) &name, &namelen);
+
+  char buffer[INET_ADDRSTRLEN];
+  const char* p = inet_ntop(AF_INET, &name.sin_addr, buffer, sizeof(buffer));
+  printf("Welcome to Chat!\n");
+  printf("Waiting for a connection on %s port %s\n", buffer, MYPORT);
+
+  close(sock);
+}
+
+void setupSocket(char *port) {
+  int sockfd, newfd; // listen on sockfd, new connection on newfd
+  struct addrinfo hints; // has the ip, port, and socket information
+  struct addrinfo *res; // points to the results of getaddrinfo (linked list)
+  struct sockaddr_storage their_addr;
+  socklen_t addr_size;
+  int rv;
+  int yes = 1;
+  
+  if (port == NULL) {
+    port = MYPORT;
+  }
+  printf("DEBUG: using port %s\n", port);
+  char hostname[1024];
+  hostname[1023] = '\0';
+  gethostname(hostname, 1023);
+  struct hostent* h;
+  h = gethostbyname(hostname);
+  printf("ss <%s %s>\n", h->h_name, port);
+
+  memset(&hints, 0, sizeof(hints));
+  hints.ai_family = AF_INET; //AF_UNSPEC;
+  hints.ai_socktype = SOCK_STREAM; // TCP
+  hints.ai_flags = AI_PASSIVE; // use my IP address
+
+  if ((rv = getaddrinfo(NULL, port, &hints, &res)) != 0) {
+    printf("ERROR: getaddrinfo failed\n");
+    exit(1);
+  }
+
+  // make a socket, bind it, listen on it
+  if ((sockfd = socket(res->ai_family, res->ai_socktype, res->ai_protocol)) < 0) {
+    printf("ERROR: socket failed\n");
+    exit(1);
+  }
+
+  if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(int)) < 0) {
+    printf("ERROR: setsockopt failed\n");
+    exit(1);
+  }
+
+  if (bind(sockfd, res->ai_addr, res->ai_addrlen) < 0) {
+    printf("ERROR: bind failed\n");
+    exit(1);
+  }
+
+  if (listen(sockfd, 10) < 0) {
+    printf("ERROR: listen failed\n");
+    exit(1);
+  }
+
+  while (1) {
+    // now accept an incoming connection
+    addr_size = sizeof(their_addr);
+    if ((newfd = accept(sockfd, (struct sockaddr *)&their_addr, &addr_size)) < 0) {
+      printf("ERROR: listen accept\n");
+      exit(1);
+    } else {
+      // read URL and chain information
+      char *packet = (char*)malloc(AWGET_SIZE);
+      while (1) {
+        memset(packet, 0, AWGET_SIZE);
+        int recv_bytes = recv(newfd, packet, AWGET_SIZE, 0);
+        if (recv_bytes == 0) {
+          printf("Connection closed.\n");
+          exit(0);
+        } else if (recv_bytes == -1) {
+          printf("ERROR: ss recv failed\n");
+          exit(1);
+        } else {
+          // Derialization
+          awget_t data;
+          deserialize(&data, packet);
+        }
+      }
+    }
+  }
+/*
+  char buffer[MAXDATASIZE];
+  while (1) {
+    memset(&buffer[0], 0, sizeof(buffer));
+    int recv_bytes = recv(newfd, buffer, sizeof(buffer), 0);
+    if (recv_bytes == 0) {
+      printf("Chat session closed.\n");
+      exit(0);
+    } else if (recv_bytes == -1) {
+      printf("ERROR: server recv failed\n");
+      exit(1);
+    } else {
+      uint16_t recv_version = ntohs(buffer[0] | buffer[1] << 8);
+      uint16_t recv_size = ntohs(buffer[2] | buffer[3] << 8);
+
+      printf("Friend: ");
+      for (int i = 4; i <= (recv_size+4); i++) {
+        printf("%c", buffer[i]);
+      }
+      printf("\nYou: ");
+
+      char msg[140];
+      memset(&msg[0], 0, sizeof(msg));
+      fgets(msg, 200, stdin);
+      while (strlen(msg) > 140) {
+        printf("Error: Input too long.\nYou: ");
+        memset(&msg[0], 0, sizeof(msg));
+        fgets(msg, 200, stdin);
+      }
+      size_t ln = strlen(msg) - 1;
+      if (msg[ln] == '\n') {
+        msg[ln] = '\0';
+      }
+
+      uint16_t version = htons(457);
+      uint16_t msgsize = htons(strlen(msg));
+
+      char packet[144];
+      memset(&packet[0], 0, sizeof(packet));
+      memcpy ( &packet[0], &version, sizeof(version) );
+      memcpy ( &packet[2], &msgsize, sizeof(msgsize) );
+      strncpy ( &packet[4], msg, strlen(msg) );
+
+      int bytes_sent = -1, len = strlen(msg)+4;
+      while (bytes_sent != len) {
+        bytes_sent = send(newfd, &packet, len, 0);
+      }
+    }
+  }
+*/
+}
+
+// get sockaddr, IPv4 or IPv6:
+void *get_in_addr(struct sockaddr *sa)
+{
+  if (sa->sa_family == AF_INET) {
+    return &(((struct sockaddr_in*)sa)->sin_addr);
+  }
+
+  return &(((struct sockaddr_in6*)sa)->sin6_addr);
+}
+
+void client(char *ip_addr, char *port) {
+  printf("Connecting to server... ");
+
+  int sockfd, numbytes;
+  struct addrinfo hints, *servinfo, *p;
+  int rv;
+  char server_ip[INET_ADDRSTRLEN];
+
+  memset(&hints, 0, sizeof(hints));
+  hints.ai_family = AF_INET; //AF_UNSPEC;
+  hints.ai_socktype = SOCK_STREAM;
+
+  if ((rv = getaddrinfo(ip_addr, port, &hints, &servinfo)) != 0) {
+    printf("ERROR: getaddrinfo failed\n");
+    exit(1);
+  }
+
+  if ((sockfd = socket(servinfo->ai_family, servinfo->ai_socktype, servinfo->ai_protocol)) < 0) {
+    printf("ERROR: client socket failed\n");
+    exit(1);
+  }
+
+  if (connect(sockfd, servinfo->ai_addr, servinfo->ai_addrlen) < 0) {
+    printf("ERROR: client connect failed\n");
+    exit(1);
+  }
+
+  inet_ntop(servinfo->ai_family, get_in_addr((struct sockaddr *)servinfo->ai_addr), server_ip, sizeof(server_ip));
+  printf("Connected!\n");
+  printf("Connected to a friend! You send first.\n");
+
+  printf("You: ");
+  char msg[140];
+  memset(&msg[0], 0, sizeof(msg));
+  fgets(msg, 200, stdin);
+  while (strlen(msg) > 140) {
+    printf("Error: Input too long.\nYou: ");
+    memset(&msg[0], 0, sizeof(msg));
+    fgets(msg, 200, stdin);
+  }
+  size_t ln = strlen(msg) - 1;
+  if (msg[ln] == '\n') {
+    msg[ln] = '\0';
+  }
+
+  uint16_t version = htons(457);
+  uint16_t msgsize = htons(strlen(msg));
+
+  char packet[144];
+  memset(&packet[0], 0, sizeof(packet));
+  memcpy ( &packet[0], &version, sizeof(version) );
+  memcpy ( &packet[2], &msgsize, sizeof(msgsize) );
+  strncpy ( &packet[4], msg, strlen(msg) );
+
+  int bytes_sent = -1, len = strlen(msg)+4;
+  while (bytes_sent != len) {
+    bytes_sent = send(sockfd, &packet, len, 0);
+  }
+
+  char buffer[MAXDATASIZE];
+  while (1) {
+    memset(&buffer[0], 0, sizeof(buffer));
+    int recv_bytes = recv(sockfd, buffer, sizeof(buffer), 0);
+    if (recv_bytes == 0) {
+      printf("Chat session closed.\n");
+      exit(0);
+    } else if (recv_bytes == -1) {
+      printf("ERROR: server recv failed\n");
+      exit(1);
+    } else {
+      uint16_t recv_version = ntohs(buffer[0] | buffer[1] << 8);
+      uint16_t recv_size = ntohs(buffer[2] | buffer[3] << 8);
+
+      printf("Friend: ");
+      for (int i = 4; i <= (recv_size+4); i++) {
+        printf("%c", buffer[i]);
+      }
+      printf("\nYou: ");
+
+      char msg[140];
+      memset(&msg[0], 0, sizeof(msg));
+      fgets(msg, 200, stdin);
+      while (strlen(msg) > 140) {
+        printf("Error: Input too long.\nYou: ");
+        memset(&msg[0], 0, sizeof(msg));
+        fgets(msg, 200, stdin);
+      }
+      size_t ln = strlen(msg) - 1;
+      if (msg[ln] == '\n') {
+        msg[ln] = '\0';
+      }
+
+      uint16_t version = htons(457);
+      uint16_t msgsize = htons(strlen(msg));
+
+      char packet[144];
+      memset(&packet[0], 0, sizeof(packet));
+      memcpy ( &packet[0], &version, sizeof(version) );
+      memcpy ( &packet[2], &msgsize, sizeof(msgsize) );
+      strncpy ( &packet[4], msg, strlen(msg) );
+
+      int bytes_sent = -1, len = strlen(msg)+4;
+      while (bytes_sent != len) {
+        bytes_sent = send(sockfd, &packet, len, 0);
+      }
+    }
+  }
+}
+
+
+void readSteppingStoneFile(char *chainfile, awget_t *meta)
+{
+  FILE *fp;
+  char *mode = "r";
+  fp = fopen(chainfile, mode);
+  if (fp == NULL) {
+    printf("Cannot open file %s\n", chainfile);
+    exit(1);
+  }
+  
+  int numSS;
+  fscanf(fp, "%d", &numSS);
+  //printf("DEBUG: numSS = %d\n", numSS);
+  meta->numStones = numSS;
+
+  printf("chainlist is\n");
+  char ssAddr[IP_SIZE];
+  char ssPort[PORT_SIZE];
+  memset(&ssAddr, 0, sizeof(ssAddr));
+  memset(&ssPort, 0, sizeof(ssPort));
+  int i = 0;
+  while (fscanf(fp, "%s %s", ssAddr, ssPort) != EOF) {
+    printf("<%s, %s>\n", ssAddr, ssPort);
+    ss_t ss;
+    memcpy(&(ss.ip_addr), &ssAddr, sizeof(ssAddr));
+    memcpy(&(ss.port), &ssPort, sizeof(ssPort));
+    memcpy(&(meta->stones[i]), &ss, sizeof(ss));
+    //printf("DEBUG: <%s %s>\n", meta->stones[i].ip_addr, meta->stones[i].port);
+    i++;
+  }
+}
+
+void sendRequestToSteppingStone(ss_t *ss, awget_t *meta)
+{
+
+  // Bind to first stepping stone
+  int sockfd, numbytes;
+  struct addrinfo hints, *servinfo, *p;
+  int rv;
+  char server_ip[INET_ADDRSTRLEN];
+
+  memset(&hints, 0, sizeof(hints));
+  hints.ai_family = AF_INET; //AF_UNSPEC;
+  hints.ai_socktype = SOCK_STREAM;
+
+  printf("DEBUG: ss->ip_addr ss->port %s %s", ss->ip_addr, ss->port);
+  if ((rv = getaddrinfo(ss->ip_addr, ss->port, &hints, &servinfo)) != 0) {
+    printf("ERROR: getaddrinfo failed\n");
+    exit(1);
+  }
+
+  if ((sockfd = socket(servinfo->ai_family, servinfo->ai_socktype, servinfo->ai_protocol)) < 0) {
+    printf("ERROR: client socket failed\n");
+    exit(1);
+  }
+
+  if (connect(sockfd, servinfo->ai_addr, servinfo->ai_addrlen) < 0) {
+    printf("ERROR: client connect failed\n");
+    exit(1);
+  }
+
+  inet_ntop(servinfo->ai_family, get_in_addr((struct sockaddr *)servinfo->ai_addr), server_ip, sizeof(server_ip));
+
+  // Serialize the meta struct into a char array
+  char *packet = (char*)malloc(AWGET_SIZE);
+  packet = serialize(meta);
+
+  // Derialization
+  //awget_t newMeta;
+  //deserialize(&newMeta, packet);
+
+  // Send meta data to first stepping stone
+  int bytes_sent = -1, len = AWGET_SIZE;
+  while (bytes_sent < len) {
+    bytes_sent = send(sockfd, &packet, len, 0);
+  }
+  
+  // Wait to receive the file
+  printf("waiting for file...\n");
+  // TODO need to figure out how to detect the size of the incoming webpage
+  // so that we are receving it all
+  char buffer[MAXDATASIZE];
+  while (1) {
+    memset(&buffer[0], 0, sizeof(buffer));
+    int recv_bytes = recv(sockfd, buffer, sizeof(buffer), 0);
+    if (recv_bytes == 0) {
+      printf("Connection closed.\n");
+      exit(1);
+    } else if (recv_bytes == -1) {
+      printf("ERROR: awget recv failed\n");
+      exit(1);
+    } else {
+      // packet should send size of page
+      // before sending the page.
+      //for (int i = 0; i <= recv_size; i++) {
+      //  printf("%c", buffer[i]);
+      //}
+    }
+  }
+
+  free(packet);
+}
+
+// ss flow
+// create a socket and bind it (server)
+// set socket in listen mode
+// for (;;)
+//   newfd = accept(serverfd) BLOCKS
+//   deserialize wgetData packet
+//   struct thread_data {
+//    int thread_id;
+//    int newfd;
+//    awget_t awgetData;
+//   };
+//   pthread_create(newfd)
+//   {
+//     if (chainlist empty)
+//       system(wget)
+//       send html packet to newfd
+//       tear down connection and delete local copy
+//     else
+//       select next random stepping stone
+//       serialize wgetData
+//       socket,connect next_ss_fd
+//       wait to receive html packet from next ss receive BLOCKS
+//       send html packet to newfd
+//       tear down connection and delete local copy
+//   }
+//
+//
+
+int startServer(char *port)
+{
+  int sockfd; // server socket
+	struct addrinfo hints; // relevant socket information
+  struct addrinfo *res; // results of getaddrinfo (linked list)
+  int yes = 1; // used in setsocketopt()
+  int status; 
+
+	memset(&hints, 0, sizeof(hints));
+	hints.ai_family = AF_INET; // IPv4
+	hints.ai_socktype = SOCK_STREAM; // TCP
+	hints.ai_flags = AI_PASSIVE; // use my IP address
+
+	if ((status = getaddrinfo(NULL, port, &hints, &res)) != 0) {
+		printf("ERROR: startServer getaddrinfo failed\n");
+		exit(1);
+	}
+
+	// create a socket
+	if ((sockfd = socket(res->ai_family, res->ai_socktype, res->ai_protocol)) < 0) {
+		printf("ERROR: startServer socket failed\n");
+		exit(1);
+	}
+
+  // lose the pesky "Address already in use" error message
+	if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(int)) < 0) {
+		printf("ERROR: startServer setsockopt failed\n");
+		exit(1);
+	}
+
+  // bind the socket
+	if (bind(sockfd, res->ai_addr, res->ai_addrlen) < 0) {
+		printf("ERROR: startServer bind failed\n");
+		exit(1);
+	}
+
+  return sockfd;
+}
+
+char* wgetWebpage(char* url)
+{
+  char command[1024];
+  char *tmpfile = "/tmp/sga_ss_webpage.html";
+  sprintf(command, "wget %s -qO %s", url, tmpfile);
+  printf("DEBUG: system command '%s'\n", &command);
+  if (system(command) != 0) {
+    printf("ERROR: system call '%s' failed\n", command);
+    exit(1);
+  }
+  
+  FILE *f = fopen(tmpfile, "rb");
+  if (f == NULL) {
+    printf("Cannot open file %s\n", tmpfile);
+    exit(1);
+  }
+  fseek(f, 0, SEEK_END);
+  long fsize = ftell(f);
+  fseek(f, 0, SEEK_SET);
+  printf("DEBUG: file size %d\n", fsize);
+  printf("DEBUG: sizeof long %d\n", sizeof(long));
+  
+  char *string = malloc(fsize + 1);
+  fread(string, fsize, 1, f);
+  fclose(f);
+
+  string[fsize] = 0;
+
+  // increa size by 9 for \0 and size of file
+  uint32_t net_fsize = htonl(fsize);
+  char *html_packet = (char*)malloc(fsize + 9);
+  memset(html_packet, 0, fsize + 9);
+  memcpy(html_packet, &net_fsize, sizeof(uint32_t));
+  memcpy(html_packet+sizeof(uint32_t), string, fsize + 1);
+  free(string);
+ 
+  return html_packet;
+}
+
+void *doWork(void *threadarg)
+{
+//     if (chainlist empty)
+//       system(wget)
+//       send html packet to newfd
+//       tear down connection and delete local copy
+//     else
+//       select next random stepping stone
+//       serialize wgetData
+//       socket,connect next_ss_fd
+//       wait to receive html packet from next ss receive BLOCKS
+//       send html packet to newfd
+//       tear down connection and delete local copy
+  thread_data_t *thread_data = (thread_data_t *)threadarg;
+  awget_t data = (awget_t)thread_data->awgetData;
+
+  printf("DEBUG: number of ss left %d\n", data.numStones);
+  if (data.numStones == 0) {
+    //char *html_packet = wgetWebpage(data.url);
+    char command[1024];
+    char filename[1024];
+    // TODO turn back to tmp
+    //sprintf(filename, "/tmp/sga_ss_thread_%d_webpage.html", thread_data->thread_id);
+    sprintf(filename, "sga_ss_thread_%d_webpage", thread_data->thread_id);
+    char *tmpfile = filename;
+    sprintf(command, "wget %s -qO %s", data.url, tmpfile);
+    printf("DEBUG: system command '%s'\n", &command);
+    if (system(command) != 0) {
+      printf("ERROR: system call '%s' failed\n", command);
+      exit(1);
+    }
+    
+    FILE *f = fopen(tmpfile, "rb");
+    if (f == NULL) {
+      printf("Cannot open file %s\n", tmpfile);
+      exit(1);
+    }
+    fseek(f, 0, SEEK_END);
+    long fsize = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    printf("DEBUG: file size %d\n", fsize);
+    printf("DEBUG: sizeof long %d\n", sizeof(long));
+    
+    unsigned char *string = (unsigned char*)malloc(fsize);
+    memset(string, 0, fsize);
+    fread(string, fsize, 1, f);
+    fclose(f);
+
+    // write out webpage to disk and exit
+    char *savefile = "testfile";
+    printf("DEBUG: savefile = %s\n", savefile);
+
+    unsigned char *html_packet = (unsigned char*)malloc(fsize);
+    memset(html_packet, 0, fsize);
+    memcpy(html_packet, string, fsize);
+
+    FILE *pFile;
+    pFile = fopen(savefile, "wb");
+    fwrite(html_packet , sizeof(unsigned char), fsize, pFile);
+    fclose(pFile);
+
+    free(string);
+
+    // first, send the size of html page coming down the pipe
+    int sendsize = sizeof(uint32_t);
+    uint32_t net_fsize = htonl(fsize);
+    unsigned char *size_packet = (unsigned char*)malloc(sizeof(uint32_t));
+    memset(size_packet, 0, sizeof(uint32_t));
+    memcpy(size_packet, &net_fsize, sizeof(uint32_t));
+
+    int rc = sendall(thread_data->newfd, size_packet, &sendsize);
+    if (rc != 0) {
+      printf("ERROR: failed to send html packet\n");
+      exit(1);
+    }
+    printf("DEBUG sendall size rc = %d and %d bytes were sent\n", rc, sendsize);
+
+    sleep(1);
+
+    // now send the html page contents
+    sendsize = fsize;
+    printf("DEBUG: sending packet\n");
+    //unsigned char *p = html_packet;
+    //for (int i = 0; i < sendsize; i++) {
+    //  printf("%c", *(p++));
+    //}
+    //printf("end\n");
+    rc = sendall(thread_data->newfd, html_packet, &sendsize);
+    if (rc != 0) {
+      printf("ERROR: failed to send html packet\n");
+      exit(1);
+    }
+    printf("DEBUG sendall rc = %d and %d bytes were sent\n", rc, sendsize);
+    // TODO turn back on
+    //if (remove(tmpfile) != 0) {
+    //  printf("ERROR: failed to delete file '%s'\n", tmpfile);
+    //  exit(1);
+    //}
+    // wait to here they received the file
+  } else {
+    ss_t nextSS = selectRandomSteppingStone(&data);
+
+    // Bind to first stepping stone
+    int sockfd, newfd, numbytes;
+    struct addrinfo hints, *servinfo, *p;
+    int rv;
+    char server_ip[INET_ADDRSTRLEN];
+    socklen_t addr_size;
+    struct sockaddr_storage their_addr;
+
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_INET; //AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+
+    printf("DEBUG: ss->ip_addr ss->port %s %s\n", nextSS.ip_addr, nextSS.port);
+    if ((rv = getaddrinfo(nextSS.ip_addr, nextSS.port, &hints, &servinfo)) != 0) {
+      printf("ERROR: getaddrinfo failed\n");
+      exit(1);
+    }
+
+    if ((sockfd = socket(servinfo->ai_family, servinfo->ai_socktype, servinfo->ai_protocol)) < 0) {
+      printf("ERROR: client socket failed\n");
+      exit(1);
+    }
+
+    if (connect(sockfd, servinfo->ai_addr, servinfo->ai_addrlen) < 0) {
+      printf("ERROR: client connect failed\n");
+      exit(1);
+    }
+
+    inet_ntop(servinfo->ai_family, get_in_addr((struct sockaddr *)servinfo->ai_addr), server_ip, sizeof(server_ip));
+
+    // Serialize the meta struct into a char array
+    unsigned char *packet = serialize(&data);
+
+    // Send meta data to first stepping stone
+    int sendsize = AWGET_SIZE;
+    int rc = sendall(sockfd, packet, &sendsize);
+    if (rc != 0) {
+      printf("ERROR: failed to send html packet\n");
+      exit(1);
+    }
+    
+    // Wait to receive the file
+    printf("waiting for file...\n");
+    unsigned char buffer[sizeof(uint32_t)];
+    memset(&buffer[0], 0, sizeof(buffer));
+    int recv_bytes = recv(sockfd, buffer, sizeof(buffer), 0);
+    if (recv_bytes == 0) {
+      printf("Connection closed.\n");
+      exit(1);
+    } else if (recv_bytes == -1) {
+      printf("ERROR: awget recv failed\n");
+      exit(1);
+    } else {
+      // wait for first packet with webpage size
+      uint32_t net_fsize;
+      memcpy(&net_fsize, buffer, sizeof(uint32_t));
+      printf("DEBUG: deserialize filesize %d\n", net_fsize);
+      uint32_t fsize = ntohl(net_fsize);
+      printf("DEBUG: deserialize filesize %d\n", fsize);
+
+      // receive webpage now
+      int rb = 0, b = 0;
+      unsigned char *html_packet = (unsigned char*)malloc(fsize+1);
+      while (rb < fsize) {
+        printf("rb = %d\n", rb);
+        b = recv(sockfd, (html_packet+rb), fsize, 0);
+        rb += b;
+        if (b == 0) {
+          printf("Connection closed.\n");
+          exit(1);
+        } else if (b == -1) {
+          printf("ERROR: awget recv failed\n");
+          exit(1);
+        }
+      }
+      printf("DEBUG: received packet (%d bytes)\n", rb);
+
+      // send html packet back to calling socket
+      int sendsize = sizeof(uint32_t);
+      unsigned char *size_packet = (unsigned char*)malloc(sizeof(uint32_t));
+      memset(size_packet, 0, sizeof(uint32_t));
+      memcpy(size_packet, &net_fsize, sizeof(uint32_t));
+
+      int rc = sendall(thread_data->newfd, size_packet, &sendsize);
+      if (rc != 0) {
+        printf("ERROR: failed to send html packet\n");
+        exit(1);
+      }
+      printf("DEBUG sendall size rc = %d and %d bytes were sent\n", rc, sendsize);
+
+      sleep(1);
+
+      // now send the html page contents
+      sendsize = fsize;
+      printf("DEBUG: sending packet\n");
+      rc = sendall(thread_data->newfd, html_packet, &sendsize);
+      if (rc != 0) {
+        printf("ERROR: failed to send html packet\n");
+        exit(1);
+      }
+      printf("DEBUG sendall rc = %d and %d bytes were sent\n", rc, sendsize);
+    }
+  }
+  close(thread_data->newfd);
+  printf("DEBUG: thread %d is returning\n", thread_data->thread_id);
+}
+
+int main(int argc, char* argv[])
+{
+  char *port = NULL;
+  srand(time(NULL));
+  
+  for (int i = 1; i < argc; ++i) {
+    if (strcmp(argv[i], "-h") == 0) {
+      help();
+    } else if (strcmp(argv[i], "-p") == 0) {
+      port = argv[++i];
+    } else {
+      help();
+    }
+  }
+
+  if (port != NULL) {
+    verifyInput(port);
+  } else {
+    port = MYPORT;
+  }
+  printf("DEBUG: using port %s\n", port);
+
+  int sockfd = startServer(port);
+  int newfd; // socket to incoming connection
+  pthread_t threads[NUM_THREADS];
+  thread_data_t thread_data_array[NUM_THREADS];
+  int thread = -1;
+
+  for (;;) {
+    // set socket to listen
+	  if (listen(sockfd, 10) < 0) {
+	  	printf("ERROR: sockfd listen failed\n");
+	  	exit(1);
+	  }
+    // accept new connection
+    struct sockaddr_storage their_addr;
+	  socklen_t addr_size = sizeof(their_addr);
+	  if ((newfd = accept(sockfd, (struct sockaddr *)&their_addr, &addr_size)) < 0) {
+	  	printf("ERROR: sockfd accept failed\n");
+	  	exit(1);
+	  } else {
+      // get new connection's packet
+      char *buffer = (char*)malloc(AWGET_SIZE);
+		  memset(buffer, 0, AWGET_SIZE);
+      int recv_bytes = recv(newfd, buffer, AWGET_SIZE, 0);
+      if (recv_bytes == 0) {
+        printf("Socket session closed.\n");
+        exit(0);
+      } else if (recv_bytes == -1) {
+        printf("ERROR: sockfd recv failed\n");
+        exit(1);
+      } else {
+        printf("DEBUG: received %d (bytes): ", recv_bytes);
+			  for (int i = 4; i <= recv_bytes; i++) {
+			  	printf("%c", buffer[i]);
+			  }
+        printf("end\n");
+        awget_t data;
+        deserialize(&data, buffer);
+        thread++;
+        if (thread > (NUM_THREADS - 1)) {
+          printf("ERROR: the program only supports %d threads\n", NUM_THREADS);
+          exit(1);
+        }
+        thread_data_array[thread].newfd = newfd;
+        thread_data_array[thread].thread_id = thread;
+        thread_data_array[thread].awgetData = data;
+        if (pthread_create(&threads[thread], NULL, doWork, (void *) &thread_data_array[thread])) {
+          printf("ERROR: could not create thread\n");
+          exit(1);
+        }
+        free(buffer);
+      }
+    }
+  } // for (;;)
+
+  return 0;
+
+  //setupSocket(port);
+  //readSteppingStoneFile(chainfile, &meta);
+  //ss_t nextSS = selectRandomSteppingStone(&meta);
+  //sendRequestToSteppingStone(&nextSS, &meta);
+}
+

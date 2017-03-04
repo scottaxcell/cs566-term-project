@@ -1,0 +1,19 @@
+*********************
+* Anonymous Web Get *
+*********************
+
+How to compile the source:
+==========================
+Run make in the same directory as the src files.
+
+Usage:
+======
+$	./awget <URL> [-c chainfile]
+$	./ss [-p port]
+
+Notes:
+======
+Awad, everything appears to be working. I have tested with a maximum
+of 4 stepping stones. I have successfully downloaded a number
+of different media types - images, html, text, pdf. Threading
+appears to be working as expected.
