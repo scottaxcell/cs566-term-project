@@ -5,6 +5,7 @@
 // Chat server includes
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 #include <inttypes.h>
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -155,6 +156,36 @@ std::vector<char> decryptDataWithPrivateKey(RSA *key, std::vector<char> &data)
 
 // ============================================================================
 /**
+* Obtain and print the outside ip address of this host
+*/
+void printPrimaryIp()
+{
+  int sock = socket(AF_INET, SOCK_DGRAM, 0);
+
+  const char* kGoogleDnsIp = "8.8.8.8";
+  uint16_t kDnsPort = 53;
+  struct sockaddr_in serv;
+  memset(&serv, 0, sizeof(serv));
+  serv.sin_family = AF_INET;
+  serv.sin_addr.s_addr = inet_addr(kGoogleDnsIp);
+  serv.sin_port = htons(kDnsPort);
+
+  int err = connect(sock, (struct sockaddr*) &serv, sizeof(serv));
+
+  struct sockaddr_in name;
+  socklen_t namelen = sizeof(name);
+  err = getsockname(sock, (struct sockaddr*) &name, &namelen);
+
+	char buffer[INET_ADDRSTRLEN];
+  const char* p = inet_ntop(AF_INET, &name.sin_addr, buffer, sizeof(buffer));
+	printf("Welcome to Chat!\n");
+	printf("Waiting for a connection on %s port %s\n", buffer, MYPORT);
+
+  close(sock);
+}
+
+// ============================================================================
+/**
 * Server example
 */
 void server() {
@@ -196,7 +227,7 @@ void server() {
 		exit(1);
 	}
 	
-	//getPrimaryIp();
+	printPrimaryIp();
 
 	// now accept an incoming connection
 	addr_size = sizeof(their_addr);
@@ -390,8 +421,19 @@ void client(char *ip_addr, char *port) {
 * Main
 */
 int main(int argc, char* argv[]) {
+  // XXX add ability to take port as input
   std::cout << "Chat Server Tester" << std::endl;
-  server();
+
+  if (argc == 1) {
+    server();
+  } else if (argc == 3) {
+		char *ip_addr = argv[1];
+		char *port = argv[2];
+    client(ip_addr, port);
+  } else {
+    std::cout << "USAGE: ./chatTester [<ip address> <port>]" << std::endl;
+    return 1;
+  }
 
   //if (argc != 3) {
   //  std::cout << "USAGE: ./rsaTester <pub file> <priv file>" << std::endl;
