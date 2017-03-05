@@ -265,8 +265,8 @@ void server(RSA *pubRSA, RSA* privRSA) {
 	std::cout << "Found a friend! You receive first." << std::endl;
 
   while (1) {
-    uint32_t net_msgsize;
-    unsigned char buffer[sizeof(net_msgsize)];
+    uint32_t netMsgSize;
+    unsigned char buffer[sizeof(netMsgSize)];
     memset(&buffer[0], 0, sizeof(buffer));
     int recv_bytes = recv(newfd, buffer, sizeof(buffer), 0);
     if (recv_bytes == 0) {
@@ -277,8 +277,8 @@ void server(RSA *pubRSA, RSA* privRSA) {
       exit(1);
     } else {
       // read received msgsize
-      memcpy(&net_msgsize, buffer, sizeof(net_msgsize));
-      uint32_t msgsize = ntohl(net_msgsize);
+      memcpy(&netMsgSize, buffer, sizeof(netMsgSize));
+      uint32_t msgsize = ntohl(netMsgSize);
       std::cout << "DEBUG: server incoming packet is " << msgsize << " bytes." << std::endl;
 
       // receive rest of the packet
@@ -310,21 +310,21 @@ void server(RSA *pubRSA, RSA* privRSA) {
       std::getline(std::cin, userInput); // stops reading at newline
 
 	    msgsize = userInput.size();
-	    net_msgsize = htonl(msgsize);
+	    netMsgSize = htonl(msgsize);
       
       std::cout << "DEBUG server input size " << msgsize << std::endl;
       std::cout << "DEBUG server input '" << userInput << "'" << std::endl;
 
       // packet format: msgsize, msg
-      uint32_t packetsize = (sizeof(net_msgsize) + msgsize);
+      uint32_t packetsize = (sizeof(netMsgSize) + msgsize);
 	    char packet[packetsize];
 	    memset(&packet[0], 0, sizeof(packet)); // zero out packet contents
-      memcpy(&packet[0], &net_msgsize, sizeof(net_msgsize)); // copy net message size into buffer
+      memcpy(&packet[0], &netMsgSize, sizeof(netMsgSize)); // copy net message size into buffer
       strncpy(&packet[sizeof(msgsize)], userInput.c_str(), msgsize); // copy message into buffer
 
       std::cout << "DEBUG: server wants to send " << packetsize << " bytes." << std::endl;
       std::cout << "DEBUG: server packet to send: ";
-	    for (int i = sizeof(net_msgsize); i < packetsize; i++) {
+	    for (int i = sizeof(netMsgSize); i < packetsize; i++) {
 	    	printf("%c", packet[i]);
 	    }
       std::cout << std::endl;
@@ -352,6 +352,19 @@ void *get_in_addr(struct sockaddr *sa)
   }
 
   return &(((struct sockaddr_in6*)sa)->sin6_addr);
+}
+
+// ============================================================================
+/**
+* Client example
+*/
+void createPacket(std::string& str, std::vector<char>& packet, uint32_t& packetSize)
+{
+	uint32_t netMsgSize = htonl(str.size());
+  packet.resize(sizeof(netMsgSize));
+  memcpy(packet.data(), &netMsgSize, sizeof(netMsgSize));
+  std::copy(str.begin(), str.end(), std::back_inserter(packet));
+  packetSize = packet.size();
 }
 
 // ============================================================================
@@ -393,43 +406,32 @@ void client(char *ip_addr, char *port, RSA *pubRSA, RSA *privRSA) {
   std::string userInput;
   std::getline(std::cin, userInput); // stops reading at newline
 
-	uint32_t msgsize = userInput.size();
-	uint32_t net_msgsize = htonl(msgsize);
-  
-  std::cout << "DEBUG client input size " << msgsize << std::endl;
-  std::cout << "DEBUG client input '" << userInput << "'" << std::endl;
+  /*DEBUG*/std::cout << "DEBUG client input size " << userInput.size() << std::endl;
+  /*DEBUG*/std::cout << "DEBUG client input '" << userInput << "'" << std::endl;
 
-  // Encrypt user input
-  //std::copy(userInput.begin(), userInput.end(), std::back_inserter(packetVec));
-  //std::vector<char> inputData(userInput.begin(), userInput.end());
-  //std::vector<char> encryptedStr = encryptDataWithPublicKey(pubRSA, inputData);
-  //std::cout << "Encrypted Input: " << encryptedStr.data() << std::endl;
-  //std::vector<char> decryptedStr = decryptDataWithPrivateKey(privRSA, encryptedStr);
-  //std::cout << "Decrypted Input: " << decryptedStr.data() << std::endl;
+  // Create packet to be sent
+  uint32_t packetSize; 
+  std::vector<char> packet;
+  createPacket(userInput, packet, packetSize);
 
-  // packet format: msgsize, msg
-  uint32_t packetsize = (sizeof(net_msgsize) + msgsize);
-	char packet[packetsize];
-	memset(&packet[0], 0, sizeof(packet)); // zero out packet contents
-  memcpy(&packet[0], &net_msgsize, sizeof(net_msgsize)); // copy net message size into buffer
-  strncpy(&packet[sizeof(msgsize)], userInput.c_str(), msgsize); // copy message into buffer
+  /*DEBUG*/std::cout << "DEBUG: client wants to send " << packetSize << " bytes." << std::endl;
+  /*DEBUG*/std::cout << "DEBUG: client packet to send: ";
+	/*DEBUG*/for (int i = sizeof(uint32_t); i < packetSize; i++) {
+	/*DEBUG*/	printf("%c", packet[i]);
+	/*DEBUG*/}
+  /*DEBUG*/std::cout << std::endl;
 
-  std::cout << "DEBUG: client wants to send " << packetsize << " bytes." << std::endl;
-  std::cout << "DEBUG: client packet to send: ";
-	for (int i = sizeof(net_msgsize); i < packetsize; i++) {
-		printf("%c", packet[i]);
-	}
-  std::cout << std::endl;
-
-  int32_t rc = sendall(sockfd, (unsigned char*)packet, &packetsize);
+  // Send packet
+  int32_t rc = sendall(sockfd, (unsigned char*)packet.data(), &packetSize);
   if (rc != 0) {
-    std::cerr << "ERROR: failed to send data" << std::endl;
+    std::cerr << "ERROR: client failed to send data" << std::endl;
     exit(1);
   }
-  std::cout << "DEBUG: client sent " << packetsize << " bytes." << std::endl;
+  /*DEBUG*/std::cout << "DEBUG: client sent " << packetSize << " bytes." << std::endl;
 
+  // Receive and reply
   while (1) {
-    unsigned char buffer[sizeof(net_msgsize)];
+    unsigned char buffer[sizeof(uint32_t)];
     memset(&buffer[0], 0, sizeof(buffer));
     int recv_bytes = recv(sockfd, buffer, sizeof(buffer), 0);
     if (recv_bytes == 0) {
@@ -439,16 +441,17 @@ void client(char *ip_addr, char *port, RSA *pubRSA, RSA *privRSA) {
       printf("ERROR: client recv failed\n");
       exit(1);
     } else {
-      // read received msgsize
-      memcpy(&net_msgsize, buffer, sizeof(net_msgsize));
-      msgsize = ntohl(net_msgsize);
-      std::cout << "DEBUG: client incoming packet is " << msgsize << " bytes." << std::endl;
+      // Read received size of message incoming
+      uint32_t netMsgSize;
+      memcpy(&netMsgSize, buffer, sizeof(netMsgSize));
+      uint32_t msgSize = ntohl(netMsgSize);
+      /*DEBUG*/std::cout << "DEBUG: client incoming packet is " << msgSize << " bytes." << std::endl;
 
-      // receive rest of the packet
+      // Receive rest of the packet
       int totalReceived = 0, received = 0;
-      unsigned char *recv_packet = (unsigned char*)malloc(msgsize+1);
-      while (totalReceived < msgsize) {
-        received = recv(sockfd, (recv_packet+totalReceived), msgsize, 0);
+      unsigned char* recv_packet = (unsigned char*)malloc(msgSize+1);
+      while (totalReceived < msgSize) {
+        received = recv(sockfd, (recv_packet+totalReceived), msgSize, 0);
         totalReceived += received;
         if (received == 0) {
           printf("Connection closed.\n");
@@ -459,10 +462,10 @@ void client(char *ip_addr, char *port, RSA *pubRSA, RSA *privRSA) {
           exit(1);
         }
       }
-      std::cout << "DEBUG: client received " << totalReceived << " bytes." << std::endl;
+      /*DEBUG*/std::cout << "DEBUG: client received " << totalReceived << " bytes." << std::endl;
 
       std::cout << "Friend: ";
-			for (int i = 0; i <= msgsize; i++) {
+			for (int i = 0; i <= msgSize; i++) {
 				printf("%c", recv_packet[i]);
 			}
       free(recv_packet);
@@ -472,33 +475,27 @@ void client(char *ip_addr, char *port, RSA *pubRSA, RSA *privRSA) {
       std::string userInput;
       std::getline(std::cin, userInput); // stops reading at newline
 
-	    uint32_t msgsize = userInput.size();
-	    uint32_t net_msgsize = htonl(msgsize);
+      // Create packet to be sent
+      uint32_t packetSize; 
+      std::vector<char> packet;
+      createPacket(userInput, packet, packetSize);
       
-      std::cout << "DEBUG client input size " << msgsize << std::endl;
-      std::cout << "DEBUG client input '" << userInput << "'" << std::endl;
+      /*DEBUG*/std::cout << "DEBUG client input size " << userInput.size() << std::endl;
+      /*DEBUG*/std::cout << "DEBUG client input '" << userInput << "'" << std::endl;
 
-      // packet format: msgsize, msg
-      uint32_t packetsize = (sizeof(net_msgsize) + msgsize);
-	    char packet[packetsize];
-	    memset(&packet[0], 0, sizeof(packet)); // zero out packet contents
-      memcpy(&packet[0], &net_msgsize, sizeof(net_msgsize)); // copy net message size into buffer
-      strncpy(&packet[sizeof(msgsize)], userInput.c_str(), msgsize); // copy message into buffer
+      /*DEBUG*/std::cout << "DEBUG: client wants to send " << packetSize << " bytes." << std::endl;
+      /*DEBUG*/std::cout << "DEBUG: client packet to send: ";
+	    /*DEBUG*/for (int i = sizeof(uint32_t); i < packetSize; i++) {
+	    /*DEBUG*/	printf("%c", packet[i]);
+	    /*DEBUG*/}
+      /*DEBUG*/std::cout << std::endl;
 
-      std::cout << "DEBUG: client wants to send " << packetsize << " bytes." << std::endl;
-      std::cout << "DEBUG: client packet to send: ";
-	    for (int i = sizeof(net_msgsize); i < packetsize; i++) {
-	    	printf("%c", packet[i]);
-	    }
-      std::cout << std::endl;
-
-
-      int32_t rc = sendall(sockfd, (unsigned char*)packet, &packetsize);
+      int32_t rc = sendall(sockfd, (unsigned char*)packet.data(), &packetSize);
       if (rc != 0) {
         std::cerr << "ERROR: failed to send data" << std::endl;
         exit(1);
       }
-      std::cout << "DEBUG: client sent " << packetsize << " bytes." << std::endl;
+      /*DEBUG*/std::cout << "DEBUG: client sent " << packetSize << " bytes." << std::endl;
 
     }
   }
